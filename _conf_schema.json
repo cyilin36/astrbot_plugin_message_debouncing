@@ -1,0 +1,25 @@
+{
+  "debounce_seconds": {
+    "description": "防抖等待时间（秒）",
+    "type": "float",
+    "default": 5.0,
+    "hint": "检测到需要进行 LLM 对话后，等待用户发送下一条消息的倒计时秒数。若在倒计时内收到新消息，则重置倒计时。",
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 0.5
+    }
+  },
+  "enable_private": {
+    "description": "私聊防抖开关",
+    "type": "bool",
+    "default": true,
+    "hint": "是否在私聊场景中启用消息防抖功能。"
+  },
+  "enable_group": {
+    "description": "群聊防抖开关",
+    "type": "bool",
+    "default": true,
+    "hint": "是否在群聊场景中启用消息防抖功能（对群内每个触发 LLM 对话的用户独立计时）。"
+  }
+}
