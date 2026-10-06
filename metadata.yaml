@@ -1,6 +1,6 @@
 name: astrbot_plugin_message_debouncing
 display_name: 消息防抖
-desc: AstrBot 消息防抖插件。当检测到需要进行 LLM 对话时，倒计时等待用户后续消息并自动聚合文本、图片、语音等多模态消息一次性提交给 LLM 处理。支持私聊与群聊独立开关，群聊中每位用户独立计时。
-version: 1.0.1
+desc: AstrBot 私聊消息防抖插件。当检测到需要进行 LLM 对话时，倒计时等待用户后续消息并自动聚合文本、图片、语音等多模态消息一次性提交给 LLM 处理；含并发会话保护与无损指令穿透，只作用于私聊，不干预群聊。
+version: 1.1.0
 author: cyilin
 repo: https://github.com/cyilin36/astrbot_plugin_message_debouncing
