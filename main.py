@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from typing import Any, Dict, List, Optional
 
 from astrbot.api import AstrBotConfig, logger
@@ -75,6 +76,134 @@ class MessageDebouncePlugin(Star):
                     return True
         return False
 
+    def _is_preprocessor_handler(self, handler: Any) -> bool:
+        """Check if an activated handler is a message preprocessor or content expander.
+
+        For example: forward message readers (astrbot_plugin_forward_reader_person),
+        voice-to-text converters, or nested attachment unpackers.
+        """
+        handler_name = getattr(handler, "handler_name", "")
+        if handler_name in ("intercept_follow_up", "debounce_waiting_llm"):
+            return False
+
+        full_name = str(getattr(handler, "handler_full_name", "")).lower()
+        name = str(handler_name).lower()
+        module = str(getattr(handler, "handler_module_path", "")).lower()
+
+        # Exclude debounce plugin itself
+        if "debounce" in full_name or "debounce" in module:
+            return False
+
+        # Exclude commands
+        filters = getattr(handler, "event_filters", []) or []
+        for f in filters:
+            if f.__class__.__name__ == "CommandFilter":
+                return False
+
+        # Match known preprocessor keywords
+        keywords = ("forward", "reader", "expand", "unpack", "preprocess", "normaliz")
+        if any(k in full_name or k in name or k in module for k in keywords):
+            return True
+
+        # Match filters indicating forward or preprocessor functionality
+        for f in filters:
+            f_name = f.__class__.__name__.lower()
+            if "forward" in f_name or "preprocess" in f_name:
+                return True
+
+        return False
+
+    async def _preprocess_follow_up_event(self, event: AstrMessageEvent) -> None:
+        """Run preprocessor handlers (such as forward message expanders) on follow-up events.
+
+        This ensures that forward messages, replies, and attachments in follow-up messages
+        are fully expanded into Plain, Image, etc., before we intercept and merge them.
+        """
+        activated = event.get_extra("activated_handlers") or []
+        handlers_parsed_params = event.get_extra("handlers_parsed_params") or {}
+        executed = set()
+
+        for handler in activated:
+            if not self._is_preprocessor_handler(handler):
+                continue
+            handler_func = getattr(handler, "handler", None)
+            if not callable(handler_func):
+                continue
+
+            full_name = getattr(handler, "handler_full_name", str(handler))
+            executed.add(full_name)
+            params = handlers_parsed_params.get(full_name, {})
+            try:
+                logger.info(
+                    f"[Debounce] Preprocessing follow-up message with {full_name}."
+                )
+                res = handler_func(event, **params)
+                if inspect.isawaitable(res):
+                    await res
+                elif inspect.isasyncgen(res):
+                    async for _ in res:
+                        pass
+            except Exception as e:
+                logger.error(
+                    f"[Debounce] Error running preprocessor {full_name}: {e}",
+                    exc_info=True,
+                )
+
+        if not executed:
+            await self._fallback_preprocess_forward_msg(event)
+
+    async def _fallback_preprocess_forward_msg(self, event: AstrMessageEvent) -> None:
+        """Fallback to trigger forward reader handler from global registry if not in activated_handlers."""
+        try:
+            from astrbot.core.star.star_handler import star_handlers_registry, EventType
+        except ImportError:
+            return
+
+        if not star_handlers_registry:
+            return
+
+        # Check if message contains forward or reply components
+        message_obj = getattr(event, "message_obj", None)
+        raw_msg = getattr(message_obj, "raw_message", None)
+        comps = list(getattr(message_obj, "message", []) or [])
+
+        has_forward_candidate = False
+        for comp in comps:
+            c_name = comp.__class__.__name__.lower()
+            if c_name in ("forward", "node", "nodes", "reply"):
+                has_forward_candidate = True
+                break
+        if not has_forward_candidate and isinstance(raw_msg, dict):
+            raw_text = str(raw_msg).lower()
+            if "forward" in raw_text or "node" in raw_text:
+                has_forward_candidate = True
+
+        if not has_forward_candidate:
+            return
+
+        for handler in star_handlers_registry.get_handlers_by_event_type(
+            EventType.AdapterMessageEvent
+        ):
+            if self._is_preprocessor_handler(handler):
+                handler_func = getattr(handler, "handler", None)
+                if callable(handler_func):
+                    full_name = getattr(handler, "handler_full_name", str(handler))
+                    try:
+                        logger.info(
+                            f"[Debounce] Fallback running preprocessor {full_name} on follow-up event."
+                        )
+                        res = handler_func(event)
+                        if inspect.isawaitable(res):
+                            await res
+                        elif inspect.isasyncgen(res):
+                            async for _ in res:
+                                pass
+                    except Exception as e:
+                        logger.error(
+                            f"[Debounce] Error in fallback preprocessor {full_name}: {e}",
+                            exc_info=True,
+                        )
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def intercept_follow_up(self, event: AstrMessageEvent) -> None:
         """High-priority event handler to intercept follow-up messages during debounce.
@@ -99,6 +228,14 @@ class MessageDebouncePlugin(Star):
             session.cancelled = True
             session.reset_event.set()
             return
+
+        # Ensure follow-up event inherits wake status from active session
+        # so downstream preprocessors (like forward_reader) checking event.is_at_or_wake_command work.
+        event.is_wake = True
+        event.is_at_or_wake_command = True
+
+        # Preprocess follow-up message (e.g. expand forward messages) before interception
+        await self._preprocess_follow_up_event(event)
 
         # Active debounce session exists for this user: capture message
         async with session.lock:
@@ -190,6 +327,8 @@ class MessageDebouncePlugin(Star):
                 text_lines.append(text)
 
         initial_event.message_str = "\n".join(text_lines)
+        if getattr(initial_event, "message_obj", None):
+            initial_event.message_obj.message_str = initial_event.message_str
 
         # 2. Merge message components (message_obj.message)
         initial_chain = initial_event.get_messages()
@@ -197,14 +336,20 @@ class MessageDebouncePlugin(Star):
             evt_chain = evt.get_messages()
             if not evt_chain:
                 continue
+
+            # Strip @bot from follow-up messages to keep prompt clean
+            valid_comps = [
+                comp
+                for comp in evt_chain
+                if not (isinstance(comp, At) and str(getattr(comp, "qq", "")) == bot_self_id)
+            ]
+            if not valid_comps:
+                continue
+
             # Add newline plain separator between distinct messages if initial chain has items
             if initial_chain:
                 initial_chain.append(Plain("\n"))
-            for comp in evt_chain:
-                # Strip @bot from follow-up messages to keep prompt clean
-                if isinstance(comp, At) and str(getattr(comp, "qq", "")) == bot_self_id:
-                    continue
-                initial_chain.append(comp)
+            initial_chain.extend(valid_comps)
 
         logger.info(
             f"[Debounce] Successfully merged {len(session.collected_events)} follow-up message(s) for {session.key}."
