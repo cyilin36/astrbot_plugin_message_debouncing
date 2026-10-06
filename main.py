@@ -8,19 +8,6 @@ from astrbot.api.message_components import At, Plain
 from astrbot.api.star import Context, Star
 
 
-def _coerce_bool(value: Any, default: bool = True) -> bool:
-    """Coerce a config value to bool, tolerating string values from JSON edits."""
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() not in ("", "0", "false", "no", "off", "none")
-    return bool(value)
-
-
 def _event_timestamp(event: AstrMessageEvent) -> float:
     """Best-effort arrival timestamp used to restore message order when merging."""
     try:
@@ -101,11 +88,14 @@ class MessageDebouncePlugin(Star):
         value = self._get_float("preprocess_timeout_seconds", 30.0, 0.0)
         return value if value > 0 else None
 
-    def _is_debouncing_enabled(self, event: AstrMessageEvent) -> bool:
-        """Debouncing only applies to private chats."""
-        if not event.is_private_chat():
-            return False
-        return _coerce_bool(self.config.get("enable_private", True), True)
+    @staticmethod
+    def _handles_chat(event: AstrMessageEvent) -> bool:
+        """Debouncing only ever applies to private chats; group chats are untouched.
+
+        There is deliberately no plugin-level on/off switch: AstrBot's plugin page
+        already provides enable/disable.
+        """
+        return event.is_private_chat()
 
     # ------------------------------------------------------------- session key
 
@@ -152,7 +142,7 @@ class MessageDebouncePlugin(Star):
 
     def should_intercept(self, event: AstrMessageEvent) -> bool:
         """Whether ``intercept_follow_up`` has something to do for this event."""
-        if not self._is_debouncing_enabled(event):
+        if not self._handles_chat(event):
             return False
         return self._get_live_session(self._get_session_key(event)) is not None
 
@@ -371,7 +361,7 @@ class MessageDebouncePlugin(Star):
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=1000)
     async def intercept_follow_up(self, event: AstrMessageEvent) -> None:
         """High-priority handler that captures follow-up messages during debounce."""
-        if not self._is_debouncing_enabled(event):
+        if not self._handles_chat(event):
             return
 
         session_key = self._get_session_key(event)
@@ -455,7 +445,7 @@ class MessageDebouncePlugin(Star):
         Starts the debounce countdown, waits for follow-ups, and merges all collected
         messages once the timer expires.
         """
-        if not self._is_debouncing_enabled(event):
+        if not self._handles_chat(event):
             return
 
         session_key = self._get_session_key(event)

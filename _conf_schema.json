@@ -10,12 +10,6 @@
       "step": 0.5
     }
   },
-  "enable_private": {
-    "description": "私聊防抖开关",
-    "type": "bool",
-    "default": true,
-    "hint": "是否启用私聊消息防抖。本插件只作用于私聊，群聊消息不会被拦截或合并。"
-  },
   "preprocess_timeout_seconds": {
     "description": "后续消息前置解析超时（秒，0=不限制）",
     "type": "float",

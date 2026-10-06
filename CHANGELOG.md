@@ -2,6 +2,13 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.1.1] - 2026-10-07
+
+### 变更
+
+- 移除 `enable_private` 配置项。插件既然只作用于私聊，这个开关就是多余的——需要停用时直接使用 AstrBot 插件页的启用/禁用开关即可。
+- 配置项精简为两项：`debounce_seconds`、`preprocess_timeout_seconds`。
+
 ## [1.1.0] - 2026-10-07
 
 > ⚠️ **破坏性变更：移除群聊防抖，插件改为只作用于私聊。**
@@ -56,6 +63,7 @@
 - 群聊中按用户独立计时与缓冲。
 - 私聊/群聊独立开关，可自定义防抖等待时间。
 
+[1.1.1]: https://github.com/cyilin36/astrbot_plugin_message_debouncing/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/cyilin36/astrbot_plugin_message_debouncing/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/cyilin36/astrbot_plugin_message_debouncing/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/cyilin36/astrbot_plugin_message_debouncing/releases/tag/v1.0.0
